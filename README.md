@@ -1,5 +1,5 @@
 Proof of concept for toe control via OSC.
-Commands can be sent by pressing Q,W,E,R for the left toes, and A,S,D,F for the right toes.
+Commands can be sent by holding or releasing Q,W,E,R for the left toes, and A,S,D,F for the right toes.
 Or, click the buttons on the user interface.
 
 Avatars toes will need to be built to respond to boolean OSC input.
