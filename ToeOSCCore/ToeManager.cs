@@ -71,59 +71,47 @@ namespace ToeOSCCore
         private TrackerState _lastLeftToes;
         private TrackerState _lastRightFoot;
         private TrackerState _lastRightToes;
+        private Quaternion _leftToeRestRelative;
+        private Quaternion _rightToeRestRelative;
 
-public void CalibrateToes(TrackerState leftFoot, TrackerState leftToes,
+        public void CalibrateToes(TrackerState leftFoot, TrackerState leftToes,
                                   TrackerState rightFoot, TrackerState rightToes)
         {
-            // Capture foot-relative toe hinge axis at neutral pose
-            _leftToeRestAxis = Vector3.Transform(Vector3.UnitX,
-                                Quaternion.Normalize(Quaternion.Inverse(leftFoot.RotationCalibrated) * leftToes.RotationCalibrated));
+            // Store foot-relative toe orientation in world space (uncalibrated)
+            _leftToeRestRelative = Quaternion.Normalize(Quaternion.Inverse(leftFoot.Rotation) * leftToes.Rotation);
+            _rightToeRestRelative = Quaternion.Normalize(Quaternion.Inverse(rightFoot.Rotation) * rightToes.Rotation);
 
-            _rightToeRestAxis = Vector3.Transform(Vector3.UnitX,
-                                Quaternion.Normalize(Quaternion.Inverse(rightFoot.RotationCalibrated) * rightToes.RotationCalibrated));
-
-            Console.WriteLine($"Calibration complete. Left rest axis: {_leftToeRestAxis}, Right rest axis: {_rightToeRestAxis}");
+            Console.WriteLine($"Calibration complete.\nLeft: {_leftToeRestRelative}\nRight: {_rightToeRestRelative}");
         }
 
         private void ProcessToeSide(TrackerState foot, TrackerState toes, FootSide side)
         {
-            // 1. Toe rotation relative to foot
-            Quaternion toeLocalRot = Quaternion.Normalize(Quaternion.Inverse(foot.RotationCalibrated) * toes.RotationCalibrated);
+            // 1. Current relative rotation (raw world space)
+            Quaternion currentRelative = Quaternion.Normalize(Quaternion.Inverse(foot.Rotation) * toes.Rotation);
 
-            // 2. Toe hinge axis in foot-local space (X-axis)
-            Vector3 toeHingeWorld = Vector3.Transform(Vector3.UnitX, toeLocalRot);
+            // 2. Rest relative rotation captured during calibration
+            Quaternion restRelative = (side == FootSide.Left) ? _leftToeRestRelative : _rightToeRestRelative;
 
-            // 3. Compute foot plane using foot's up vector (Y axis)
-            Vector3 footUp = Vector3.Transform(Vector3.UnitY, foot.RotationCalibrated);
+            // 3. Difference between current and rest
+            Quaternion delta = Quaternion.Normalize(Quaternion.Inverse(restRelative) * currentRelative);
 
-            // 4. Project hinge axis onto foot plane
-            Vector3 projectedHinge = toeHingeWorld - Vector3.Dot(toeHingeWorld, footUp) * footUp;
+            // 4. Interpret toe bending as rotation around local X (hinge axis)
+            Vector3 hingeAxis = Vector3.UnitX;
+            Vector3 rotatedAxis = Vector3.Transform(hingeAxis, delta);
 
-            if (projectedHinge.LengthSquared() < 1e-6f)
-                projectedHinge = Vector3.UnitX; // fallback if almost zero
+            // 5. Angle between rest and current hinge axis
+            float angle = MathF.Acos(Math.Clamp(Vector3.Dot(Vector3.Normalize(hingeAxis),
+                                                            Vector3.Normalize(rotatedAxis)), -1f, 1f));
+            float angleDeg = angle * (180f / MathF.PI);
 
-            projectedHinge = Vector3.Normalize(projectedHinge);
+            // 6. Boolean threshold
+            bool toesBending = angleDeg > 20f;
 
-            // 5. Pre-calibrated rest axis, also projected onto foot plane
-            Vector3 toeHingeRest = (side == FootSide.Left) ? _leftToeRestAxis : _rightToeRestAxis;
-
-            // Project rest axis onto same plane
-            Vector3 projectedRest = toeHingeRest - Vector3.Dot(toeHingeRest, footUp) * footUp;
-            projectedRest = Vector3.Normalize(projectedRest);
-
-            // 6. Angle between projected vectors
-            float deltaRad = MathF.Acos(Math.Clamp(Vector3.Dot(projectedHinge, projectedRest), -1f, 1f));
-            float deltaDeg = deltaRad * (180f / MathF.PI);
-
-            // 7. Boolean threshold for bending
-            bool toesBending = deltaDeg > 20f;
-
-            // 8. Send OSC boolean for all toes
             for (int i = 0; i < 5; i++)
                 SetToeValue(i, side, toesBending);
 
-            // Debug
-            Console.WriteLine($"Foot ({side}) toe projected delta: {deltaDeg:F1}°, bending: {toesBending}");
+            Console.WriteLine($"Foot ({side}) toe delta: {angleDeg:F1}°, bending: {toesBending}");
+            Console.WriteLine($"Foot ({side}) toe euler: {delta.QuaternionToEuler():F1}°, bending: {toesBending}");
         }
 
 
