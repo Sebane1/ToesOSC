@@ -1,6 +1,7 @@
 ﻿using Everything_To_IMU_SlimeVR.Tracking;
 using ImuToXInput;
 using LucHeart.CoreOSC;
+using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Numerics;
 
@@ -31,87 +32,88 @@ namespace ToeOSCCore
                 Console.SetCursorPosition(0, 0);
 
                 // LEFT FOOT + TOES
-                if (_slimeVrClient.Trackers.TryGetValue("LEFT_FOOT", out var leftFoot) &&
-                    _slimeVrClient.Trackers.TryGetValue("Toes Left", out var leftToes))
+                if (_slimeVrClient.Trackers.TryGetValue("LEFT_FOOT", out var leftFoot))
                 {
-                    ProcessToeSide(leftFoot, leftToes, FootSide.Left);
-                    _lastLeftFoot = leftFoot;
-                    _lastLeftToes = leftToes;
+                    if (_slimeVrClient.Trackers.TryGetValue("Toes Left", out var leftToes))
+                    {
+                        CalibrateToes(leftFoot, leftToes);
+                        for (int i = 0; i < 5; i++)
+                        {
+                            ProcessToeSide(leftFoot, leftToes, FootSide.Left, i);
+                        }
+                    }
+                    if (_slimeVrClient.Trackers.TryGetValue("Big Toe Left", out var bigToeLeft))
+                    {
+                        CalibrateToes(bigToeLeft, bigToeLeft);
+                        ProcessToeSide(leftFoot, bigToeLeft, FootSide.Left, 1);
+                    }
+                    if (_slimeVrClient.Trackers.TryGetValue("Other Toes Left", out var otherToesLeft))
+                    {
+                        CalibrateToes(otherToesLeft, otherToesLeft);
+                        for (int i = 1; i < 5; i++)
+                        {
+                            ProcessToeSide(leftFoot, otherToesLeft, FootSide.Left, i);
+                        }
+                    }
                 }
 
                 // RIGHT FOOT + TOES
-                if (_slimeVrClient.Trackers.TryGetValue("RIGHT_FOOT", out var rightFoot) &&
-                    _slimeVrClient.Trackers.TryGetValue("Toes Right", out var rightToes))
+                if (_slimeVrClient.Trackers.TryGetValue("RIGHT_FOOT", out var rightFoot))
                 {
-                    ProcessToeSide(rightFoot, rightToes, FootSide.Right);
-                    _lastRightFoot = rightFoot;
-                    _lastRightToes = rightToes;
-                }
-                if (!calibrated)
-                {
-                    CalibrateToes(leftFoot, _lastLeftToes, rightFoot, _lastRightToes);
-                    calibrated = true;
-                }
-                // Optional: debug for NONE tracker
-                if (_slimeVrClient.Trackers.TryGetValue("NONE", out var none))
-                {
-                    Console.WriteLine(none.Euler);
+                    if (_slimeVrClient.Trackers.TryGetValue("Toes Right", out var rightToes))
+                    {
+                        CalibrateToes(rightFoot, rightToes);
+                        for (int i = 0; i < 5; i++)
+                        {
+                            ProcessToeSide(rightFoot, rightToes, FootSide.Right, i);
+                        }
+                    }
+                    if (_slimeVrClient.Trackers.TryGetValue("Big Toe Right", out var bigToesRight))
+                    {
+                        CalibrateToes(bigToesRight, bigToesRight);
+                        ProcessToeSide(rightFoot, bigToesRight, FootSide.Right, 1);
+                    }
+                    if (_slimeVrClient.Trackers.TryGetValue("Other Toes Right", out var otherToesRight))
+                    {
+                        CalibrateToes(otherToesRight, otherToesRight);
+                        for (int i = 1; i < 5; i++)
+                        {
+                            ProcessToeSide(rightFoot, otherToesRight, FootSide.Right, i);
+                        }
+                    }
+                    // Optional: debug for NONE tracker
+                    if (_slimeVrClient.Trackers.TryGetValue("NONE", out var none))
+                    {
+                        Console.WriteLine(none.Euler);
+                    }
                 }
             } catch (Exception ex)
             {
                 Console.WriteLine($"ToeLoop error: {ex.Message}");
             }
         }
+        ConcurrentDictionary<string, Quaternion> _toeCalibrationDictionary = new ConcurrentDictionary<string, Quaternion>();
 
-        // Store these per foot after calibration
-        private Vector3 _leftToeRestAxis;
-        private Vector3 _rightToeRestAxis;
-        private bool calibrated;
-        private TrackerState _lastLeftFoot;
-        private TrackerState _lastLeftToes;
-        private TrackerState _lastRightFoot;
-        private TrackerState _lastRightToes;
-        private Quaternion _leftToeRestRelative;
-        private Quaternion _rightToeRestRelative;
-
-        public void CalibrateToes(TrackerState leftFoot, TrackerState leftToes,
-                                  TrackerState rightFoot, TrackerState rightToes)
+        public void CalibrateToes(TrackerState foot, TrackerState toeTracker)
         {
-            // Store foot-relative toe orientation in world space (uncalibrated)
-            _leftToeRestRelative = Quaternion.Normalize(Quaternion.Inverse(leftFoot.Rotation) * leftToes.Rotation);
-            _rightToeRestRelative = Quaternion.Normalize(Quaternion.Inverse(rightFoot.Rotation) * rightToes.Rotation);
-
-            Console.WriteLine($"Calibration complete.\nLeft: {_leftToeRestRelative}\nRight: {_rightToeRestRelative}");
+            if (!_toeCalibrationDictionary.ContainsKey(toeTracker.BodyPart))
+            {
+                // Store foot-relative toe orientation in world space (uncalibrated)
+                _toeCalibrationDictionary[toeTracker.BodyPart] = Quaternion.Normalize(Quaternion.Inverse(foot.RotationCalibrated) * toeTracker.RotationCalibrated);
+                Console.WriteLine($"Calibration complete.\n{toeTracker.BodyPart}:{_toeCalibrationDictionary[toeTracker.BodyPart]}");
+            }
         }
 
-        private void ProcessToeSide(TrackerState foot, TrackerState toes, FootSide side)
+        private void ProcessToeSide(TrackerState foot, TrackerState toe, FootSide side, int toeNumber)
         {
-            // 1. Current relative rotation (raw world space)
-            Quaternion currentRelative = Quaternion.Normalize(Quaternion.Inverse(foot.Rotation) * toes.Rotation);
+            Quaternion currentRelative = Quaternion.Normalize(Quaternion.Inverse(foot.RotationCalibrated) * toe.RotationCalibrated);
+            bool toesBending = currentRelative.QuaternionToEuler().X > 30f;
 
-            // 2. Rest relative rotation captured during calibration
-            Quaternion restRelative = (side == FootSide.Left) ? _leftToeRestRelative : _rightToeRestRelative;
+            SetToeValue(toeNumber, side, toesBending);
 
-            // 3. Difference between current and rest
-            Quaternion delta = Quaternion.Normalize(Quaternion.Inverse(restRelative) * currentRelative);
-
-            // 4. Interpret toe bending as rotation around local X (hinge axis)
-            Vector3 hingeAxis = Vector3.UnitX;
-            Vector3 rotatedAxis = Vector3.Transform(hingeAxis, delta);
-
-            // 5. Angle between rest and current hinge axis
-            float angle = MathF.Acos(Math.Clamp(Vector3.Dot(Vector3.Normalize(hingeAxis),
-                                                            Vector3.Normalize(rotatedAxis)), -1f, 1f));
-            float angleDeg = angle * (180f / MathF.PI);
-
-            // 6. Boolean threshold
-            bool toesBending = angleDeg > 20f;
-
-            for (int i = 0; i < 5; i++)
-                SetToeValue(i, side, toesBending);
-
-            Console.WriteLine($"Foot ({side}) toe delta: {angleDeg:F1}°, bending: {toesBending}");
-            Console.WriteLine($"Foot ({side}) toe euler: {delta.QuaternionToEuler():F1}°, bending: {toesBending}");
+            Console.WriteLine($"Foot ({toe.BodyPart}) toe local euler: {currentRelative.QuaternionToEuler():F1}°, bending: {toesBending}");
+            Console.WriteLine($"Foot ({toe.BodyPart}) toe world euler: {toe.RotationCalibrated.QuaternionToEuler():F1}°, bending: {toesBending}");
+            Console.WriteLine($"Foot ({toe.BodyPart}) foot world euler: {foot.RotationCalibrated.QuaternionToEuler()}");
         }
 
 
